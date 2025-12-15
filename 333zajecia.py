@@ -1,147 +1,172 @@
 import streamlit as st
-import pandas as pd # Dodajemy Pandas dla lepszego wyświetlania tabel
+import pandas as pd
+from datetime import datetime
 
 # --- Konfiguracja aplikacji ---
-st.set_page_config(page_title="Zaawansowany Magazyn", layout="wide")
-st.title("🏭 Zaawansowany System Magazynowy")
-st.caption("Przechowuje nazwy i ilości, z możliwością modyfikacji i filtrowania.")
+st.set_page_config(page_title="Pełny System Magazynowy", layout="wide")
+st.title("Mega Magazyn: Śledzenie, Transakcje i Alarmy")
 
-# 1. Inicjalizacja stanu sesji (słownik towarów: {nazwa: ilosc})
+# 1. Inicjalizacja stanu sesji
 if 'magazyn' not in st.session_state:
-    # Słownik jest lepszy niż lista, gdy potrzebujemy par klucz-wartość (nazwa: ilość)
+    # Struktura: {nazwa_towaru: {'ilosc': int, 'min_stan': int, 'transakcje': list}}
     st.session_state.magazyn = {}
+if 'transakcje_historia' not in st.session_state:
+    # Globalna historia transakcji: [{'typ': 'Przyjęcie/Wydanie', 'towar': nazwa, 'ilosc': int, 'data': datetime}]
+    st.session_state.transakcje_historia = []
+
 
 # --- Funkcje logiki biznesowej ---
 
-def dodaj_lub_zaktualizuj_towar(nazwa, ilosc):
-    """Dodaje nowy towar lub zwiększa/aktualizuje jego ilość."""
+def rejestruj_transakcje(typ, nazwa, ilosc):
+    """Rejestruje transakcję w historii."""
+    st.session_state.transakcje_historia.append({
+        'typ': typ,
+        'towar': nazwa,
+        'ilosc': ilosc,
+        'data': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+def dodaj_nowy_towar(nazwa, ilosc, min_stan):
+    """Dodaje nowy towar z ilością i stanem minimalnym."""
     nazwa = nazwa.strip().capitalize()
     
-    if not nazwa:
-        st.error("Nazwa towaru nie może być pusta.")
+    if not nazwa or nazwa in st.session_state.magazyn:
+        st.error("Nazwa jest pusta lub towar już istnieje.")
         return
 
-    try:
-        ilosc = int(ilosc)
-        if ilosc <= 0:
-            st.warning("Ilość musi być liczbą całkowitą większą niż 0.")
+    st.session_state.magazyn[nazwa] = {
+        'ilosc': int(ilosc),
+        'min_stan': int(min_stan),
+    }
+    rejestruj_transakcje("Przyjęcie (Nowy)", nazwa, ilosc)
+    st.success(f"Dodano nowy towar: **{nazwa}** w ilości {ilosc} sztuk. Min. stan: {min_stan}")
+
+def przyjmij_wydaj_towar(nazwa, ilosc_zmiany, operacja):
+    """Realizuje operację przyjęcia (dodania) lub wydania (odjęcia)."""
+    if nazwa not in st.session_state.magazyn:
+        st.error(f"Towar **{nazwa}** nie istnieje.")
+        return
+
+    obecna_ilosc = st.session_state.magazyn[nazwa]['ilosc']
+    
+    if operacja == "Przyjęcie":
+        nowa_ilosc = obecna_ilosc + ilosc_zmiany
+        rejestruj_transakcje("Przyjęcie", nazwa, ilosc_zmiany)
+        st.session_state.magazyn[nazwa]['ilosc'] = nowa_ilosc
+        st.success(f"Przyjęto {ilosc_zmiany} szt. **{nazwa}**. Nowy stan: {nowa_ilosc}")
+        
+    elif operacja == "Wydanie":
+        if obecna_ilosc < ilosc_zmiany:
+            st.error(f"Błąd! Nie można wydać {ilosc_zmiany} szt. Dostępne: {obecna_ilosc}")
             return
             
-        if nazwa in st.session_state.magazyn:
-            st.session_state.magazyn[nazwa] += ilosc
-            st.success(f"Zwiększono stan towaru **{nazwa}** o {ilosc} sztuk.")
-        else:
-            st.session_state.magazyn[nazwa] = ilosc
-            st.success(f"Dodano nowy towar: **{nazwa}** w ilości {ilosc} sztuk.")
+        nowa_ilosc = obecna_ilosc - ilosc_zmiany
+        rejestruj_transakcje("Wydanie", nazwa, ilosc_zmiany)
+        st.session_state.magazyn[nazwa]['ilosc'] = nowa_ilosc
+        st.success(f"Wydano {ilosc_zmiany} szt. **{nazwa}**. Nowy stan: {nowa_ilosc}")
+
+        if nowa_ilosc < st.session_state.magazyn[nazwa]['min_stan']:
+            st.warning(f"🚨 **UWAGA NISKI STAN!** Towar **{nazwa}** jest poniżej stanu minimalnego ({st.session_state.magazyn[nazwa]['min_stan']}).")
+
+
+# --- Interfejs użytkownika Streamlit ---
+
+tab_magazyn, tab_transakcje, tab_ustawienia = st.tabs(["📋 Stan Magazynu", "📜 Historia Transakcji", "⚙️ Ustawienia i Narzędzia"])
+
+# --- TABELA STANU MAGAZYNU ---
+with tab_magazyn:
+    st.header("Stan Magazynu i Transakcje")
+    
+    # Przetwarzanie danych do wyświetlenia
+    data_list = []
+    towary_niskostanowe = 0
+    
+    for nazwa, dane in st.session_state.magazyn.items():
+        data_list.append({
+            'Nazwa Towaru': nazwa,
+            'Ilość w Magazynie': dane['ilosc'],
+            'Stan Minimalny': dane['min_stan'],
+            'Niski Stan?': 'TAK 🔴' if dane['ilosc'] < dane['min_stan'] else 'NIE 🟢'
+        })
+        if dane['ilosc'] < dane['min_stan']:
+            towary_niskostanowe += 1
+
+    if data_list:
+        df = pd.DataFrame(data_list)
+        df = df.sort_values(by='Nazwa Towaru')
+
+        # Wyświetlanie alertu o niskim stanie
+        if towary_niskostanowe > 0:
+            st.error(f"⚠️ **{towary_niskostanowe}** towarów jest poniżej stanu minimalnego! Sprawdź tabelę.")
+
+        # Wyszukiwanie/Filtrowanie
+        search_term = st.text_input("Filtruj towary po nazwie:", "", key="search_magazyn").strip()
+
+        if search_term:
+            df = df[df['Nazwa Towaru'].str.contains(search_term, case=False)]
             
-    except ValueError:
-        st.error("Ilość musi być poprawną liczbą całkowitą.")
-
-def usun_towar_calkowicie(nazwa):
-    """Usuwa towar całkowicie z magazynu."""
-    if nazwa in st.session_state.magazyn:
-        del st.session_state.magazyn[nazwa]
-        st.success(f"Towar **{nazwa}** został usunięty z magazynu.")
-    else:
-        st.warning(f"Towar **{nazwa}** nie znaleziono.")
-
-def modyfikuj_ilosc(nazwa, zmiana):
-    """Zwiększa lub zmniejsza ilość istniejącego towaru."""
-    if nazwa not in st.session_state.magazyn:
-        st.error(f"Towar **{nazwa}** nie istnieje w magazynie.")
-        return
-
-    nowa_ilosc = st.session_state.magazyn[nazwa] + zmiana
-
-    if nowa_ilosc < 0:
-        st.warning(f"Nie można zmniejszyć ilości poniżej 0. Aktualny stan: {st.session_state.magazyn[nazwa]}")
-        return
-    elif nowa_ilosc == 0:
-        # Pytanie, czy usunąć, jeśli zejdzie do zera. Na razie usuwamy.
-        usun_towar_calkowicie(nazwa)
-        st.info(f"Towar **{nazwa}** zszedł do zera i został usunięty z listy.")
-    else:
-        st.session_state.magazyn[nazwa] = nowa_ilosc
-        st.success(f"Zmieniono stan towaru **{nazwa}**. Nowa ilość: {nowa_ilosc}")
-
-# --- Interfejs użytkownika Streamlit (użycie kolumn dla lepszego layoutu) ---
-
-col1, col2 = st.columns(2)
-
-# --- PANEL 1: DODAWANIE / AKTUALIZACJA ---
-with col1:
-    st.header("➕ Dodaj / Zaktualizuj Towar")
-    with st.form("form_dodaj"):
-        towar_do_dodania = st.text_input("Nazwa Towaru (unikalna):").strip()
-        ilosc_startowa = st.number_input("Początkowa Ilość:", min_value=1, step=1, value=1)
-        dodaj_przycisk = st.form_submit_button("Dodaj/Zwiększ Stan")
-
-        if dodaj_przycisk:
-            dodaj_lub_zaktualizuj_towar(towar_do_dodania, ilosc_startowa)
-
-# --- PANEL 2: MODYFIKACJA STANU ---
-with col2:
-    st.header("🔄 Modifikacja Stanu")
-    if st.session_state.magazyn:
-        towary_list = list(st.session_state.magazyn.keys())
-        towar_do_zmiany = st.selectbox(
-            "Wybierz Towar do Zmiany:",
-            towary_list,
-            key="select_mod"
-        )
-        
-        zmiana = st.number_input("Zmień Ilość o (ujemna = odejmij):", value=0, step=1)
-        
-        col_mod_1, col_mod_2 = st.columns(2)
-
-        if col_mod_1.button("Zapisz Zmianę Ilości", use_container_width=True):
-            if zmiana != 0:
-                modyfikuj_ilosc(towar_do_zmiany, zmiana)
-            else:
-                st.warning("Wprowadź wartość inną niż 0.")
-                
-        if col_mod_2.button("Usuń Towar Całkowicie", type="primary", use_container_width=True):
-            usun_towar_calkowicie(towar_do_zmiany)
-
-    else:
-        st.info("Brak towarów do modyfikacji. Dodaj coś najpierw!")
-
-st.markdown("---")
-
-# --- PANEL 3: WIDOK MAGAZYNU I WYSZUKIWANIE ---
-
-st.header("📋 Stan Magazynu")
-
-if st.session_state.magazyn:
-    # Konwersja słownika na DataFrame Pandas dla łatwego wyświetlania
-    df = pd.DataFrame(
-        list(st.session_state.magazyn.items()), 
-        columns=['Nazwa Towaru', 'Ilość']
-    )
-    df['Nazwa Towaru'] = df['Nazwa Towaru'].str.capitalize()
-    df = df.sort_values(by='Nazwa Towaru')
-
-    # Funkcja Wyszukiwania/Filtrowania
-    search_term = st.text_input("Filtruj towary po nazwie:", "").strip()
-
-    if search_term:
-        df_filtered = df[
-            df['Nazwa Towaru'].str.contains(search_term, case=False)
-        ]
-        st.dataframe(
-            df_filtered, 
-            use_container_width=True, 
-            hide_index=True
-        )
-        st.info(f"Znaleziono {len(df_filtered)} towarów pasujących do frazy '{search_term}'.")
-    else:
         st.dataframe(
             df, 
             use_container_width=True, 
             hide_index=True
         )
-        
-    st.markdown(f"**Całkowita liczba unikalnych towarów w magazynie:** `{len(st.session_state.magazyn)}`")
+    else:
+        st.info("Magazyn jest pusty. Użyj sekcji Transakcje, aby dodać towary.")
 
-else:
-    st.info("Magazyn jest pusty. Użyj panelu 'Dodaj' powyżej.")
+    st.markdown("---")
+    
+    # Panel Dodawania / Transakcji
+    st.subheader("Operacje Magazynowe (Przyjęcie/Wydanie)")
+    
+    col_op_1, col_op_2 = st.columns(2)
+    
+    with col_op_1:
+        st.markdown("##### 🆕 Dodaj NOWY Towar")
+        with st.form("form_dodaj_nowy"):
+            n_nazwa = st.text_input("Nazwa Towaru:", key="n_nazwa").strip()
+            n_ilosc = st.number_input("Ilość Początkowa:", min_value=1, step=1, value=1)
+            n_min_stan = st.number_input("Stan Minimalny (alarm):", min_value=1, step=1, value=5)
+            if st.form_submit_button("Dodaj Nowy Towar do Magazynu"):
+                dodaj_nowy_towar(n_nazwa, n_ilosc, n_min_stan)
+                
+    with col_op_2:
+        st.markdown("##### 🔄 Przyjęcie / Wydanie (Istniejące)")
+        if st.session_state.magazyn:
+            towary_list = sorted(list(st.session_state.magazyn.keys()))
+            op_towar = st.selectbox("Wybierz Towar:", towary_list, key="op_towar")
+            op_ilosc = st.number_input("Ilość Zmiany:", min_value=1, step=1, value=1)
+            op_typ = st.radio("Typ Operacji:", ["Przyjęcie", "Wydanie"])
+            
+            if st.button(f"Wykonaj Operację: {op_typ}"):
+                przyjmij_wydaj_towar(op_towar, op_ilosc, op_typ)
+        else:
+            st.info("Brak towarów do operacji. Dodaj towar w panelu obok.")
+
+
+# --- TABELA HISTORII TRANSAKCJI ---
+with tab_transakcje:
+    st.header("📜 Rejestr Transakcji")
+    
+    if st.session_state.transakcje_historia:
+        df_transakcje = pd.DataFrame(st.session_state.transakcje_historia)
+        
+        st.dataframe(
+            df_transakcje.sort_values(by='data', ascending=False),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("Brak zarejestrowanych transakcji.")
+
+# --- NARZĘDZIA I USTAWIENIA ---
+with tab_ustawienia:
+    st.header("⚙️ Narzędzia Magazynowe")
+    
+    st.subheader("Resetowanie Danych")
+    st.warning("Ta operacja usunie **wszystkie dane** z magazynu i historię transakcji. Jest nieodwracalna.")
+    
+    if st.button("Wyczyść Cały Magazyn i Historię", type="primary"):
+        st.session_state.magazyn = {}
+        st.session_state.transakcje_historia = []
+        st.success("Magazyn został pomyślnie zresetowany!")
+        st.experimental_rerun() # Odświeżenie aplikacji, aby zmiany były widoczne natychmiast
