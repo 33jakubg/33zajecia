@@ -24,6 +24,7 @@ def pobierz_stan_magazynu():
 
 def pobierz_historie():
     try:
+        # Sortowanie po created_at (standard w Supabase)
         response = supabase.table("transakcje").select("*").order("created_at", desc=True).execute()
         return response.data
     except Exception:
@@ -35,6 +36,7 @@ def pobierz_historie():
             return []
 
 def rejestruj_transakcje(typ, nazwa, ilosc):
+    """Dodaje wpis do tabeli transakcje w Supabase"""
     data = {
         "typ": str(typ),
         "towar": str(nazwa),
@@ -43,7 +45,7 @@ def rejestruj_transakcje(typ, nazwa, ilosc):
     try:
         supabase.table("transakcje").insert(data).execute()
     except Exception as e:
-        st.error(f"Błąd podczas zapisywania transakcji: {e}")
+        st.error(f"Błąd podczas zapisywania w tabeli transakcje: {e}")
 
 def dodaj_nowy_towar(nazwa, ilosc, min_stan):
     nazwa = nazwa.strip().capitalize()
@@ -53,20 +55,24 @@ def dodaj_nowy_towar(nazwa, ilosc, min_stan):
     try:
         data = {"nazwa": nazwa, "ilosc": int(ilosc), "min_stan": int(min_stan)}
         supabase.table("magazyn").insert(data).execute()
+        # Zapis w historii
         rejestruj_transakcje("Przyjęcie (Nowy)", nazwa, ilosc)
         st.success(f"Dodano nowy towar: **{nazwa}**")
     except Exception as e:
-        st.error(f"Błąd: Towar prawdopodobnie już istnieje lub brak uprawnień. ({e})")
+        st.error(f"Błąd dodawania towaru: {e}")
 
 def usun_towar(nazwa):
+    """Usuwa towar z magazynu i zapisuje to w tabeli transakcje"""
     try:
-        # Usunięcie produktu z tabeli magazyn
+        # 1. Najpierw usuwamy z tabeli magazyn
         supabase.table("magazyn").delete().eq("nazwa", nazwa).execute()
-        # Zarejestrowanie faktu usunięcia w historii
-        rejestruj_transakcje("Usunięcie produktu", nazwa, 0)
-        st.success(f"Produkt **{nazwa}** został usunięty z magazynu.")
+        
+        # 2. Następnie wysyłamy informację o usunięciu do tabeli transakcje
+        rejestruj_transakcje("USUNIĘCIE PRODUKTU", nazwa, 0)
+        
+        st.success(f"Produkt **{nazwa}** został całkowicie usunięty.")
     except Exception as e:
-        st.error(f"Błąd podczas usuwania produktu: {e}")
+        st.error(f"Błąd podczas usuwania: {e}")
 
 def aktualizuj_stan(nazwa, ilosc_zmiany, operacja):
     try:
@@ -76,7 +82,6 @@ def aktualizuj_stan(nazwa, ilosc_zmiany, operacja):
             return
 
         obecna_ilosc = res.data['ilosc']
-        min_stan = res.data['min_stan']
         nowa_ilosc = obecna_ilosc + ilosc_zmiany if operacja == "Przyjęcie" else obecna_ilosc - ilosc_zmiany
 
         if operacja == "Wydanie" and obecna_ilosc < ilosc_zmiany:
@@ -101,7 +106,7 @@ with tab_magazyn:
         df = pd.DataFrame(dane)
         st.dataframe(df, use_container_width=True, hide_index=True)
         
-        st.markdown("### Zarządzanie produktami")
+        st.markdown("---")
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -110,48 +115,43 @@ with tab_magazyn:
                 n_nazwa = st.text_input("Nazwa")
                 n_ilosc = st.number_input("Ilość", min_value=0)
                 n_min = st.number_input("Minimum", min_value=0, value=5)
-                if st.form_submit_button("Dodaj produkt"):
+                if st.form_submit_button("Dodaj"):
                     dodaj_nowy_towar(n_nazwa, n_ilosc, n_min)
                     st.rerun()
 
         with col2:
-            st.subheader("🔄 Operacja (+/-)")
+            st.subheader("🔄 Operacja")
             lista_towarow = [item['nazwa'] for item in dane]
-            o_towar = st.selectbox("Wybierz produkt", lista_towarow, key="op_select")
-            o_ilosc = st.number_input("Ilość zmiany", min_value=1)
+            o_towar = st.selectbox("Produkt", lista_towarow, key="op_select")
+            o_ilosc = st.number_input("Ilość", min_value=1)
             o_typ = st.radio("Typ", ["Przyjęcie", "Wydanie"])
-            if st.button("Wykonaj operację"):
+            if st.button("Wykonaj"):
                 aktualizuj_stan(o_towar, o_ilosc, o_typ)
                 st.rerun()
 
         with col3:
             st.subheader("🗑️ Usuń produkt")
-            u_towar = st.selectbox("Produkt do usunięcia", lista_towarow, key="del_select")
-            st.warning(f"Czy na pewno chcesz trwale usunąć {u_towar}?")
-            if st.button("Usuń bezpowrotnie", type="secondary"):
+            u_towar = st.selectbox("Wybierz do usunięcia", lista_towarow, key="del_select")
+            if st.button("USUŃ Z BAZY", type="secondary"):
                 usun_towar(u_towar)
                 st.rerun()
     else:
-        st.warning("Baza danych jest pusta lub niedostępna.")
-        if st.button("Spróbuj dodać pierwszy towar"):
-            dodaj_nowy_towar("Testowy Produkt", 10, 5)
+        st.warning("Magazyn jest pusty.")
+        if st.button("Dodaj produkt testowy"):
+            dodaj_nowy_towar("Test", 10, 5)
             st.rerun()
 
 with tab_transakcje:
-    st.header("Historia operacji")
+    st.header("Historia (Tabela 'transakcje')")
     historia = pobierz_historie()
     if historia:
         st.dataframe(pd.DataFrame(historia), use_container_width=True)
     else:
-        st.info("Brak zarejestrowanych transakcji.")
+        st.info("Brak wpisów w historii.")
 
 with tab_ustawienia:
-    st.header("Ustawienia systemowe")
-    if st.button("Wyczyść całą bazę (wszystkie produkty i historię)", type="primary"):
-        try:
-            supabase.table("magazyn").delete().neq("nazwa", "").execute()
-            supabase.table("transakcje").delete().neq("typ", "").execute()
-            st.success("Baza została wyczyszczona.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Błąd czyszczenia bazy: {e}")
+    if st.button("Wyczyść wszystko", type="primary"):
+        supabase.table("magazyn").delete().neq("nazwa", "").execute()
+        # Przy czyszczeniu wszystkiego też warto dodać wpis, ale tutaj czyścimy też historię:
+        supabase.table("transakcje").delete().neq("typ", "").execute()
+        st.rerun()
